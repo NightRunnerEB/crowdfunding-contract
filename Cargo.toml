@@ -1,0 +1,26 @@
+[package]
+name = "crowdfunding"
+version = "0.0.0"
+publish = false
+edition = "2021"
+authors = ["you"]
+
+[lib]
+path = "src/crowdfunding.rs"
+
+[dependencies]
+multiversx-sc = { version = "0.53.0" }
+clap = { version = "4.0", features = ["derive"] }
+
+[dev-dependencies]
+num-bigint = "0.4"
+
+[dev-dependencies.multiversx-sc-scenario]
+version = "0.53.0"
+
+[workspace]
+members = [
+    ".",
+    "meta",
+    "interactor"
+]
