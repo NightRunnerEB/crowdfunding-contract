@@ -25,8 +25,8 @@ pub trait Crowdfunding: events::CrowdfundingEvents {
         self.target().set(target);
         self.deadline().set(&deadline);
 
-        // let owner = self.blockchain().get_owner_address();
-        // self.contract_initialized_event(owner.clone(), target.clone(), deadline);
+        let owner = self.blockchain().get_owner_address();
+        self.contract_initialized_event(owner.clone(), target.clone(), deadline);
     }
 
     #[endpoint]
@@ -42,7 +42,7 @@ pub trait Crowdfunding: events::CrowdfundingEvents {
         let caller = self.blockchain().get_caller();
         self.deposit(&caller).update(|deposit| *deposit += &*payment);
 
-        // self.funding_received_event(caller.clone(), payment.clone_value());
+        self.funding_received_event(caller.clone(), payment.clone_value());
     }
 
     #[view]
@@ -75,7 +75,7 @@ pub trait Crowdfunding: events::CrowdfundingEvents {
                 let sc_balance = self.get_current_funds();
                 self.send().direct_egld(&caller, &sc_balance);
 
-                // self.claimed_funds_event(caller.clone(), sc_balance.clone());
+                self.claimed_funds_event(caller.clone(), sc_balance.clone());
             },
             Status::Failed => {
                 let caller = self.blockchain().get_caller();
@@ -84,7 +84,7 @@ pub trait Crowdfunding: events::CrowdfundingEvents {
                     self.deposit(&caller).clear();
                     self.send().direct_egld(&caller, &deposit);
 
-                    // self.funds_refunded_event(caller.clone(), deposit.clone());
+                    self.funds_refunded_event(caller.clone(), deposit.clone());
                 }
             }
         }
