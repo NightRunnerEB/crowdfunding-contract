@@ -24,9 +24,6 @@ pub trait Crowdfunding: events::CrowdfundingEvents {
     fn init(&self, target: &BigUint, deadline: u64) {
         self.target().set(target);
         self.deadline().set(&deadline);
-
-        let owner = self.blockchain().get_owner_address();
-        self.contract_initialized_event(owner.clone(), target.clone(), deadline);
     }
 
     #[endpoint]
