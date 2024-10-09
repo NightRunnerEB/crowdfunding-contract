@@ -1,11 +1,12 @@
 #![no_std]
 
 multiversx_sc::imports!();
-mod status_enum;
-use status_enum::Status;
+pub mod events;
+
+use multiversx_sc::derive_imports::*;
 
 #[multiversx_sc::contract]
-pub trait Crowdfunding {
+pub trait Crowdfunding: events::CrowdfundingEvents {
 
     #[view(getTarget)]
     #[storage_mapper("target")]
@@ -23,6 +24,9 @@ pub trait Crowdfunding {
     fn init(&self, target: &BigUint, deadline: u64) {
         self.target().set(target);
         self.deadline().set(&deadline);
+
+        // let owner = self.blockchain().get_owner_address();
+        // self.contract_initialized_event(owner.clone(), target.clone(), deadline);
     }
 
     #[endpoint]
@@ -37,6 +41,8 @@ pub trait Crowdfunding {
 
         let caller = self.blockchain().get_caller();
         self.deposit(&caller).update(|deposit| *deposit += &*payment);
+
+        // self.funding_received_event(caller.clone(), payment.clone_value());
     }
 
     #[view]
@@ -68,6 +74,8 @@ pub trait Crowdfunding {
 
                 let sc_balance = self.get_current_funds();
                 self.send().direct_egld(&caller, &sc_balance);
+
+                // self.claimed_funds_event(caller.clone(), sc_balance.clone());
             },
             Status::Failed => {
                 let caller = self.blockchain().get_caller();
@@ -75,8 +83,17 @@ pub trait Crowdfunding {
                 if deposit > 0u32 {
                     self.deposit(&caller).clear();
                     self.send().direct_egld(&caller, &deposit);
+
+                    // self.funds_refunded_event(caller.clone(), deposit.clone());
                 }
             }
         }
     }
+}
+
+#[derive(TopEncode, TopDecode, TypeAbi, PartialEq, Clone, Copy, Debug)]
+pub enum Status {
+    FundingPeriod,
+    Successful,
+    Failed,
 }

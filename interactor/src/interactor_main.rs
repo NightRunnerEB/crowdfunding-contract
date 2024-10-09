@@ -1,66 +1,16 @@
 #![allow(non_snake_case)]
 
 mod proxy;
+mod interactor_cli;
+mod interactor_state;
 
-use clap::{Parser, Subcommand};
+use interactor_cli::*;
+use interactor_state::State;
+use clap::Parser;
 use multiversx_sc_snippets::imports::*;
 use multiversx_sc_snippets::sdk;
-use serde::{Deserialize, Serialize};
-use std::{
-    io::{Read, Write},
-    path::Path,
-};
-
 
 const GATEWAY: &str = sdk::gateway::DEVNET_GATEWAY;
-const STATE_FILE: &str = "state.toml";
-
-#[derive(Parser)]
-#[command(name = "ContractInteract")]
-#[command(about = "CLI for interacting with the crowdfunding contract", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-
-    Deploy {
-        /// Target value (as BigUint)
-        #[arg(short, long)]
-        target: u128,
-
-        /// Deadline value (as u64)
-        #[arg(short, long)]
-        deadline: u64,
-    },
-
-    Fund {
-        /// Amount of EGLD to fund (as BigUint)
-        #[arg(short, long)]
-        amount: u128,
-    },
-
-    GetTarget,
-
-    GetDeadline,
-
-    GetDeposit {
-        /// Bech32 address of the donor
-        #[arg(short, long)]
-        donor: String,
-    },
-
-    /// Check the current status of the contract
-    Status,
-
-    /// Get the current funds in the contract
-    GetCurrentFunds,
-
-    /// Claim funds from the contract
-    Claim,
-}
 
 #[tokio::main]
 async fn main() {
@@ -90,51 +40,16 @@ async fn main() {
         Commands::GetCurrentFunds => {
             interact.get_current_funds().await;
         }
-        Commands::Claim => {
-            interact.claim().await;
+        Commands::Claim { address} => {
+            interact.claim(address).await;
         }
-    }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct State {
-    contract_address: Option<Bech32Address>,
-}
-
-impl State {
-    pub fn load_state() -> Self {
-        if Path::new(STATE_FILE).exists() {
-            let mut file = std::fs::File::open(STATE_FILE).unwrap();
-            let mut content = String::new();
-            file.read_to_string(&mut content).unwrap();
-            toml::from_str(&content).unwrap()
-        } else {
-            Self::default()
-        }
-    }
-
-    pub fn set_address(&mut self, address: Bech32Address) {
-        self.contract_address = Some(address);
-    }
-
-    pub fn current_address(&self) -> &Bech32Address {
-        self.contract_address
-            .as_ref()
-            .expect("no known contract, deploy first")
-    }
-}
-
-impl Drop for State {
-    fn drop(&mut self) {
-        let mut file = std::fs::File::create(STATE_FILE).unwrap();
-        file.write_all(toml::to_string(self).unwrap().as_bytes())
-            .unwrap();
     }
 }
 
 struct ContractInteract {
     interactor: Interactor,
-    wallet_address: Address,
+    owner_address: Bech32Address,
+    wallet_address: Bech32Address,
     contract_code: BytesValue,
     state: State,
 }
@@ -142,17 +57,28 @@ struct ContractInteract {
 impl ContractInteract {
     async fn new() -> Self {
         let mut interactor = Interactor::new(GATEWAY).await;
-        let wallet_address = interactor.register_wallet(test_wallets::alice());
+        let owner_address = interactor.register_wallet(Wallet::from_pem_file("owner.pem").unwrap());
+
+        // PASSWORD: "alice"
+        // InsertPassword::Plaintext("alice".to_string()) || InsertPassword::StandardInput
+        let wallet_address = interactor.register_wallet(
+            Wallet::from_keystore_secret(
+                "alice.json",
+                InsertPassword::Plaintext("alice".to_string()),
+            )
+            .unwrap(),
+        );
 
         let contract_code = BytesValue::interpret_from(
             "mxsc:../output/crowdfunding.mxsc.json",
             &InterpreterContext::default(),
         );
 
-        ContractInteract {
+        Self {
             interactor,
-            wallet_address,
-            contract_code,
+            owner_address: owner_address.into(),
+            wallet_address: wallet_address.into(),
+            contract_code: contract_code,
             state: State::load_state(),
         }
     }
@@ -163,7 +89,7 @@ impl ContractInteract {
         let new_address = self
             .interactor
             .tx()
-            .from(&self.wallet_address)
+            .from(&self.owner_address)
             .gas(30_000_000u64)
             .typed(proxy::CrowdfundingProxy)
             .init(target_biguint, deadline)
@@ -177,11 +103,13 @@ impl ContractInteract {
         self.state
             .set_address(Bech32Address::from_bech32_string(new_address_bech32.clone()));
 
-        println!("new address: {new_address_bech32}");
+        println!("Owner address: {new_address_bech32}");
     }
 
     async fn fund(&mut self, amount: u128) {
         let egld_amount = BigUint::<StaticApi>::from(amount);
+        let alice_address = self.wallet_address.to_string();
+        println!("Alice address: {alice_address}");
 
         let response = self
             .interactor
@@ -230,23 +158,6 @@ impl ContractInteract {
         println!("Result: {result_value:?}");
     }
 
-    async fn deposit(&mut self, donor: &str) {
-        let donor_address = Bech32Address::from_bech32_string(donor.to_string());
-
-        let result_value = self
-            .interactor
-            .query()
-            .to(self.state.current_address())
-            .typed(proxy::CrowdfundingProxy)
-            .deposit(donor_address)
-            .returns(ReturnsResultUnmanaged)
-            .prepare_async()
-            .run()
-            .await;
-
-        println!("Result: {result_value:?}");
-    }
-
     async fn status(&mut self) {
         let result_value = self
             .interactor
@@ -277,11 +188,30 @@ impl ContractInteract {
         println!("Result: {result_value:?}");
     }
 
-    async fn claim(&mut self) {
+    async fn deposit(&mut self, donor: &str) {
+        let donor_address = Bech32Address::from_bech32_string(donor.to_string());
+
+        let result_value = self
+            .interactor
+            .query()
+            .to(self.state.current_address())
+            .typed(proxy::CrowdfundingProxy)
+            .deposit(donor_address)
+            .returns(ReturnsResultUnmanaged)
+            .prepare_async()
+            .run()
+            .await;
+
+        println!("Result: {result_value:?}");
+    }
+
+    async fn claim(&mut self, address: &str) {
+        let claim_address = Bech32Address::from_bech32_string(address.to_string());
+
         let response = self
             .interactor
             .tx()
-            .from(&self.wallet_address)
+            .from(claim_address)
             .to(self.state.current_address())
             .gas(30_000_000u64)
             .typed(proxy::CrowdfundingProxy)
